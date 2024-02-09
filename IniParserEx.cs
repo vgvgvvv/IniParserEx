@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 
@@ -1049,32 +1050,55 @@ public class BaseParserWithFile : BaseParser
 	}
 }
 
-public class IniFile : ICodeFile
+public class IniFile : ICodeFile, IEnumerable<KeyValuePair<string, IniFile.Section>>
 {
+	public string FilePath { get; }
+	public string Content { get; }
+	
 	private IniFile(string filePath)
 	{
 		FilePath = filePath;
 		Content = File.ReadAllText(filePath);
 	}
 
-	public Dictionary<string, Section> Sections { get; } = new();
-	public string FilePath { get; }
-	public string Content { get; }
-
-	public void OnNextToken(BaseParser parser, Token token)
-	{
-	}
-
 	public static IniFile Parser(string filePath)
 	{
 		var iniFile = new IniFile(filePath);
-		var parser = new IniFileParser();
+		IniFileParser parser = new IniFileParser();
 		parser.InitParserSource(iniFile.FilePath, iniFile.Content);
 		parser.Parse(iniFile);
 		return iniFile;
 	}
+	
+	public void OnNextToken(BaseParser parser, Token token) { }
 
-	public class Section
+	public Section? this[string index]
+	{
+		get
+		{
+			if (Sections.TryGetValue(index, out var result))
+			{
+				return result;
+			}
+
+			return null;
+		}
+	}
+	
+	public IEnumerator<KeyValuePair<string, Section>> GetEnumerator()
+	{
+		foreach (var keyValuePair in Sections)
+		{
+			yield return keyValuePair;
+		}
+	}
+
+	IEnumerator IEnumerable.GetEnumerator()
+	{
+		return GetEnumerator();
+	}
+	
+	public class Section : IEnumerable<KeyValuePair<string, SectionItem>>
 	{
 		public Section(string name)
 		{
@@ -1082,45 +1106,59 @@ public class IniFile : ICodeFile
 			Properties = new Dictionary<string, SectionItem>();
 		}
 
+		public SectionItem? this[string index]
+		{
+			get
+			{
+				if (Properties.TryGetValue(index, out var result))
+				{
+					return result;
+				}
+
+				return null;
+			}
+		}
+		
+		public IEnumerator<KeyValuePair<string, SectionItem>> GetEnumerator()
+		{
+			foreach (var keyValuePair in Properties)
+			{
+				yield return keyValuePair;
+			}
+		}
+
+		IEnumerator IEnumerable.GetEnumerator()
+		{
+			return GetEnumerator();
+		}
+        
 		public string Name { get; }
 		public Dictionary<string, SectionItem> Properties { get; }
 	}
 
-	public class SectionItem
+	public class SectionItem : IEnumerable<SectionItem>
 	{
-		public enum SectionItemType
+		private SectionItem()
 		{
-			String,
-			Single,
-			List,
-			Map
+			ItemType = SectionItemType.None;
+			AnyItem = null;
 		}
-
-		private SectionItem(SectionItemType type, object item)
+		private SectionItem(SectionItemType type, object anyItem)
 		{
 			ItemType = type;
-			Item = item;
+			AnyItem = anyItem;
 		}
-
-		public SectionItemType ItemType { get; }
-		public object Item { get; }
-		public string Str => Item as string ?? throw new Exception("not a string !!");
-		public Ref<SectionItem> Single => Item as Ref<SectionItem> ?? throw new Exception("not a single !!");
-		public List<SectionItem> List => Item as List<SectionItem> ?? throw new Exception("not a list !!");
-
-		public Dictionary<string, SectionItem> Map =>
-			Item as Dictionary<string, SectionItem> ?? throw new Exception("not a map !!");
-
+		
 		public static SectionItem CreateString(string content)
 		{
 			return new SectionItem(SectionItemType.String, content);
 		}
-
+        
 		public static SectionItem CreateSingle()
 		{
 			return new SectionItem(SectionItemType.Single, new Ref<SectionItem>());
 		}
-
+        
 		public static SectionItem CreateList()
 		{
 			return new SectionItem(SectionItemType.List, new List<SectionItem>());
@@ -1131,15 +1169,151 @@ public class IniFile : ICodeFile
 			return new SectionItem(SectionItemType.Map, new Dictionary<string, SectionItem>());
 		}
 
+		public SectionItem? this[string index]
+		{
+			get
+			{
+				if (ItemType != SectionItemType.Map)
+				{
+					throw new Exception("you cannot index a non-map item !!");
+				}
+
+				if (Map.TryGetValue(index, out var result))
+				{
+					return result;
+				}
+
+				return null;
+			}
+		}
+
+		public SectionItem? this[int index]
+		{
+			get
+			{
+				if (ItemType != SectionItemType.List)
+				{
+					throw new Exception("you cannot index a non-list item !!");
+				}
+
+				if (index >= 0 && index < List.Count)
+				{
+					return List[index];
+				}
+
+				return null;
+			}
+		}
+		
+		
+		public enum SectionItemType
+		{
+			None,
+			String,
+			Single,
+			List,
+			Map
+		}
+
+		public SectionItemType ItemType { get; private set; }
+		public object? AnyItem { get; private set; }
+
 		public class Ref<T> where T : class
 		{
 			public T? Value;
 		}
+		public string Str
+		{
+			get
+			{
+				if (ItemType == SectionItemType.String)
+				{
+					return AnyItem as string ?? throw new Exception("not a string !!");
+				}
+				else if (ItemType == SectionItemType.Single)
+				{
+					return Single.Value?.Str ?? throw new Exception("single is non !!");
+				}
+
+				throw new Exception("must be single or string !!");
+			}
+		}
+
+		public Ref<SectionItem> Single => AnyItem as Ref<SectionItem> ?? throw new Exception("not a single !!");
+		public List<SectionItem> List => AnyItem as List<SectionItem> ?? throw new Exception("not a list !!");
+		public Dictionary<string, SectionItem> Map => AnyItem as Dictionary<string, SectionItem> ?? throw new Exception("not a map !!");
+
+		
+		public IEnumerator<SectionItem> GetEnumerator()
+		{
+			switch (ItemType)
+			{
+				case SectionItemType.String:
+					yield return this;
+					break;
+				case SectionItemType.Single:
+					yield return Single.Value ?? new SectionItem();
+					break;
+				case SectionItemType.List:
+					foreach (var sectionItem in List)
+					{
+						yield return sectionItem;
+					}
+					break;
+				case SectionItemType.Map:
+					foreach (var value in Map.Values)
+					{
+						yield return value;
+					}
+					break;
+			}
+		}
+
+		IEnumerator IEnumerable.GetEnumerator()
+		{
+			return GetEnumerator();
+		}
 	}
+
+	public Dictionary<string, Section> Sections { get; } = new();
+	
 }
 
 public class IniFileParser : BaseParserWithFile
 {
+	private interface IIniScope
+	{
+	}
+
+	private class FileScope : IIniScope
+	{
+		public FileScope(IniFile file)
+		{
+			File = file;
+		}
+		public IniFile File { get; }	
+	}
+
+	private class SectionScope : IIniScope
+	{
+		public SectionScope(IniFile.Section section)
+		{
+			Section = section;
+		}
+		
+		public IniFile.Section Section { get; }
+	}
+	
+	private class SectionItemScope : IIniScope
+	{
+		public SectionItemScope(IniFile.SectionItem item)
+		{
+			Item = item;
+		}
+		
+		public IniFile.SectionItem Item { get; }
+	}
+	
 	private Stack<IIniScope> ScopeStack { get; } = new();
 
 	public override void PreParserProcess(ICodeFile file)
@@ -1161,29 +1335,35 @@ public class IniFileParser : BaseParserWithFile
 	{
 		var currentScope = ScopeStack.Peek();
 		if (currentScope is FileScope fileScope)
+		{
 			return CompileFileScope(file, fileScope, token);
-		if (currentScope is SectionScope sectionScope)
+		}
+		else if (currentScope is SectionScope sectionScope)
+		{
 			return CompileSectionScope(file, sectionScope, token);
-		if (currentScope is SectionItemScope sectionItemScope)
+		}
+		else if (currentScope is SectionItemScope sectionItemScope)
+		{
 			return CompileSectionItemScope(file, sectionItemScope, token);
-		throw new CodeParserException("Ini Parse", $"unexpected scope {GetFileLocation(file)}");
+		}
+		else
+		{
+			throw new CodeParserException("Ini Parse", $"unexpected scope {GetFileLocation(file)}");
+		}
 	}
 
 	private bool CompileFileScope(ICodeFile? file, FileScope fileScope, Token token)
 	{
 		Debug.Assert(token.Matches('['));
-		var builder = new StringBuilder();
+		StringBuilder builder = new StringBuilder();
 		while (true)
 		{
-			var nameToken = GetToken(true) ??
-			                throw new CodeParserException("Ini Parse",
-				                $"unexpected end of file {GetFileLocation(file)}");
+			var nameToken = GetToken(true) ?? throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
 			if (nameToken.Matches(']'))
 			{
 				Debug.Assert(builder.Length > 0);
 				break;
 			}
-
 			builder.Append(nameToken.GetTokenName());
 		}
 
@@ -1192,26 +1372,33 @@ public class IniFileParser : BaseParserWithFile
 		fileScope.File.Sections.Add(name, newSection);
 
 		ScopeStack.Push(new SectionScope(newSection));
-
+		
 		return true;
 	}
 
 	private bool CompileSectionScope(ICodeFile? file, SectionScope sectionScope, Token token)
 	{
-		var isList = token.Matches('+');
-		var sectionNameBuilder = new StringBuilder();
-		var sectionItemNameToken =
-			(isList ? GetToken(true) : token) ??
-			throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
+		// meet next section
+		if (token.Matches("["))
+		{
+			ScopeStack.Pop();
+			UnGetToken(token);
+			return true;
+		}
+		
+		bool isList = token.Matches('+');
+		StringBuilder sectionNameBuilder = new StringBuilder();
+		var sectionItemNameToken = 
+			(isList ? GetToken(true) : token) ?? 
+			                          throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
 		while (!sectionItemNameToken.Matches('='))
 		{
 			Debug.Assert(sectionItemNameToken.TokenType != TokenType.Const);
 			sectionNameBuilder.Append(sectionItemNameToken.GetTokenName());
-			sectionItemNameToken = GetToken(true) ??
-			                       throw new CodeParserException("Ini Parse",
-				                       $"unexpected end of file {GetFileLocation(file)}");
+			sectionItemNameToken = GetToken(true) ?? 
+			                       throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
 		}
-
+		
 		var sectionItemNameStr = sectionNameBuilder.ToString();
 
 		IniFile.SectionItem item;
@@ -1229,7 +1416,7 @@ public class IniFileParser : BaseParserWithFile
 			item = IniFile.SectionItem.CreateSingle();
 			sectionScope.Section.Properties.Add(sectionItemNameStr, item);
 		}
-
+		
 		ScopeStack.Push(new SectionItemScope(item));
 		return true;
 	}
@@ -1238,25 +1425,25 @@ public class IniFileParser : BaseParserWithFile
 	{
 		var item = sectionItemScope.Item;
 		Debug.Assert(item.ItemType != IniFile.SectionItem.SectionItemType.String);
-
+		
 		if (item.ItemType == IniFile.SectionItem.SectionItemType.Single)
 		{
 			item.Single.Value = ParseValue(file, token);
 			ScopeStack.Pop();
 			return true;
 		}
-
-		if (item.ItemType == IniFile.SectionItem.SectionItemType.List)
+		else if (item.ItemType == IniFile.SectionItem.SectionItemType.List)
 		{
 			item.List.Add(ParseValue(file, token));
 			ScopeStack.Pop();
 			return true;
 		}
-
-		if (item.ItemType == IniFile.SectionItem.SectionItemType.Map)
+		else if (item.ItemType == IniFile.SectionItem.SectionItemType.Map)
 		{
 			if (token.TokenType != TokenType.Identifier)
+			{
 				throw new CodeParserException("Ini Parse", $"must start with a identify : {GetFileLocation(file)}");
+			}
 
 			var name = token.GetTokenName();
 			RequireSymbol('=', "Ini Parse");
@@ -1264,127 +1451,128 @@ public class IniFileParser : BaseParserWithFile
 			ScopeStack.Pop();
 			return true;
 		}
-
 		throw new CodeParserException("Ini Parse", $"unexpected item type :{item.ItemType} at {GetFileLocation(file)}");
 	}
+	
+	 private IniFile.SectionItem ParseValue(ICodeFile? file, Token token)
+    {
+        IniFile.SectionItem newItem;
+        if (token.Matches('('))
+        {
+	        UnGetToken(token);
+            newItem = IniFile.SectionItem.CreateMap();
+            ScopeStack.Push(new SectionItemScope(newItem));
+            ParseMap(file);
+        }
+        else if (token.Matches('['))
+        {
+	        UnGetToken(token);
+            newItem = IniFile.SectionItem.CreateList();
+            ScopeStack.Push(new SectionItemScope(newItem));
+            ParseList(file);
+        }
+        else
+        {
+	        var itemContentToken = token;
+	        var itemContentBuilder = new StringBuilder();
+	        if (token.TokenType == TokenType.Identifier || token.TokenType == TokenType.Symbol)
+	        {
+		        itemContentBuilder.Append(itemContentToken.GetTokenName());
+		        while (!itemContentToken.Matches(')') && itemContentToken.Matches(']') && itemContentToken.Matches(','))
+		        {
+			        Debug.Assert(itemContentToken.TokenType == TokenType.Identifier);
+			        itemContentToken = GetToken(true) ?? throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
+			        itemContentBuilder.Append(itemContentToken.GetTokenName());
+		        }
+	        }
+	        else if (token.TokenType == TokenType.Const)
+	        {
+		        itemContentBuilder.Append(itemContentToken.GetConstantValue());
+	        }
+	        else
+	        {
+		        throw new CodeParserException("Ini parse", $"unexpected token type {GetFileLocation(file)}");
+	        }
+	        newItem = IniFile.SectionItem.CreateString(itemContentBuilder.ToString());
+        }
 
-	private IniFile.SectionItem ParseValue(ICodeFile? file, Token token)
-	{
-		IniFile.SectionItem newItem;
-		if (token.Matches('('))
-		{
-			UnGetToken(token);
-			newItem = IniFile.SectionItem.CreateMap();
-			ScopeStack.Push(new SectionItemScope(newItem));
-			ParseMap(file);
-		}
-		else if (token.Matches('['))
-		{
-			UnGetToken(token);
-			newItem = IniFile.SectionItem.CreateList();
-			ScopeStack.Push(new SectionItemScope(newItem));
-			ParseList(file);
-		}
-		else
-		{
-			var itemContentToken = token;
-			var itemContentBuilder = new StringBuilder();
-			if (token.TokenType == TokenType.Identifier || token.TokenType == TokenType.Symbol)
-			{
-				itemContentBuilder.Append(itemContentToken.GetTokenName());
-				while (!itemContentToken.Matches(')') && itemContentToken.Matches(']') && itemContentToken.Matches(','))
-				{
-					Debug.Assert(itemContentToken.TokenType == TokenType.Identifier);
-					itemContentToken = GetToken(true) ?? throw new CodeParserException("Ini Parse",
-						$"unexpected end of file {GetFileLocation(file)}");
-					itemContentBuilder.Append(itemContentToken.GetTokenName());
-				}
-			}
-			else if (token.TokenType == TokenType.Const)
-			{
-				itemContentBuilder.Append(itemContentToken.GetTokenName());
-			}
-			else
-			{
-				throw new CodeParserException("Ini parse", $"unexpected token type {GetFileLocation(file)}");
-			}
+        return newItem;
+    }
+            
+    private bool ParseMap(ICodeFile? file)
+    {
+	    MatchSymbol('(');
+        var mapItem = ScopeStack.Peek() as SectionItemScope 
+                      ?? throw new CodeParserException("Ini Parse", $"unexpected scope, expect SectionItemScope {GetFileLocation(file)}");
+        while (true)
+        {
+            var token = GetToken();
 
-			newItem = IniFile.SectionItem.CreateString(itemContentBuilder.ToString());
-		}
+            if (token == null)
+            {
+                throw new CodeParserException("Ini Parse", $"unexpected end of file :{GetFileLocation(file)}");
+            }
+            
+            if (token.Matches(')'))
+            {
+	            ScopeStack.Pop();
+                break;
+            }
+            
+            if (token.Matches(','))
+            { 
+                continue;
+            }
 
-		return newItem;
-	}
+            var mapItemNameToken = token;
+            var mapItemNameBuilder = new StringBuilder();
+            while (!mapItemNameToken.Matches('='))
+            {
+	            Debug.Assert(mapItemNameToken.TokenType != TokenType.Const);
+	            mapItemNameBuilder.Append(mapItemNameToken.GetTokenName());
+	            mapItemNameToken = GetToken(true) ?? throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
+            }
+            
+            var nextToken = GetToken() ?? throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
+            var subItem = ParseValue(file, nextToken);
+            mapItem.Item.Map.Add(mapItemNameBuilder.ToString(), subItem);
+        }
+        
+        return true;
+    }
 
-	private bool ParseMap(ICodeFile? file)
-	{
-		MatchSymbol('(');
-		var mapItem = ScopeStack.Peek() as SectionItemScope
-		              ?? throw new CodeParserException("Ini Parse",
-			              $"unexpected scope, expect SectionItemScope {GetFileLocation(file)}");
-		while (true)
-		{
-			var token = GetToken();
+    private bool ParseList(ICodeFile? file)
+    {
+	    MatchSymbol('[');
+        var listItem = ScopeStack.Peek()as SectionItemScope 
+                       ?? throw new CodeParserException("Ini Parse", $"unexpected scope, expect SectionItemScope {GetFileLocation(file)}");
+        while (true)
+        {
+            var token = GetToken();
+            
+            if (token == null)
+            {
+                throw new CodeParserException("Ini Parse", $"unexpected end of file :{GetFileLocation(file)}");
+            }
+            
+            if (token.Matches(']'))
+            { 
+	            ScopeStack.Pop();
+                break;
+            }
+            
+            if (token.Matches(','))
+            { 
+                continue;
+            }
+            
+            var subItem = ParseValue(file, token);
+            listItem.Item.List.Add(subItem);
+        }
 
-			if (token == null)
-				throw new CodeParserException("Ini Parse", $"unexpected end of file :{GetFileLocation(file)}");
-
-			if (token.Matches(')'))
-			{
-				ScopeStack.Pop();
-				break;
-			}
-
-			if (token.Matches(',')) continue;
-
-			var mapItemNameToken = token;
-			var mapItemNameBuilder = new StringBuilder();
-			while (!mapItemNameToken.Matches('='))
-			{
-				Debug.Assert(mapItemNameToken.TokenType != TokenType.Const);
-				mapItemNameBuilder.Append(mapItemNameToken.GetTokenName());
-				mapItemNameToken = GetToken(true) ??
-				                   throw new CodeParserException("Ini Parse",
-					                   $"unexpected end of file {GetFileLocation(file)}");
-			}
-
-			var nextToken = GetToken() ??
-			                throw new CodeParserException("Ini Parse",
-				                $"unexpected end of file {GetFileLocation(file)}");
-			var subItem = ParseValue(file, nextToken);
-			mapItem.Item.Map.Add(mapItemNameBuilder.ToString(), subItem);
-		}
-
-		return true;
-	}
-
-	private bool ParseList(ICodeFile? file)
-	{
-		MatchSymbol('[');
-		var listItem = ScopeStack.Peek() as SectionItemScope
-		               ?? throw new CodeParserException("Ini Parse",
-			               $"unexpected scope, expect SectionItemScope {GetFileLocation(file)}");
-		while (true)
-		{
-			var token = GetToken();
-
-			if (token == null)
-				throw new CodeParserException("Ini Parse", $"unexpected end of file :{GetFileLocation(file)}");
-
-			if (token.Matches(']'))
-			{
-				ScopeStack.Pop();
-				break;
-			}
-
-			if (token.Matches(',')) continue;
-
-			var subItem = ParseValue(file, token);
-			listItem.Item.List.Add(subItem);
-		}
-
-		return true;
-	}
-
+        return true;
+    }
+	
 
 	protected override bool IsBeginComment(char currentChar)
 	{
@@ -1399,40 +1587,6 @@ public class IniFileParser : BaseParserWithFile
 	protected override bool IsLineComment(char currentChar)
 	{
 		return currentChar == '#' || currentChar == ';';
-	}
-
-	private interface IIniScope
-	{
-	}
-
-	private class FileScope : IIniScope
-	{
-		public FileScope(IniFile file)
-		{
-			File = file;
-		}
-
-		public IniFile File { get; }
-	}
-
-	private class SectionScope : IIniScope
-	{
-		public SectionScope(IniFile.Section section)
-		{
-			Section = section;
-		}
-
-		public IniFile.Section Section { get; }
-	}
-
-	private class SectionItemScope : IIniScope
-	{
-		public SectionItemScope(IniFile.SectionItem item)
-		{
-			Item = item;
-		}
-
-		public IniFile.SectionItem Item { get; }
 	}
 }
 
