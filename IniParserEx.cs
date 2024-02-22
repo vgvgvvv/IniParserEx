@@ -1061,7 +1061,7 @@ public class IniFile : ICodeFile, IEnumerable<KeyValuePair<string, IniFile.Secti
 		Content = File.ReadAllText(filePath);
 	}
 
-	public static IniFile Parser(string filePath)
+	public static IniFile Parse(string filePath)
 	{
 		var iniFile = new IniFile(filePath);
 		IniFileParser parser = new IniFileParser();
@@ -1478,7 +1478,7 @@ public class IniFileParser : BaseParserWithFile
 	        if (token.TokenType == TokenType.Identifier || token.TokenType == TokenType.Symbol)
 	        {
 		        itemContentBuilder.Append(itemContentToken.GetTokenName());
-		        while (!itemContentToken.Matches(')') && itemContentToken.Matches(']') && itemContentToken.Matches(','))
+		        while (!itemContentToken.Matches(')') && !itemContentToken.Matches(']') && !itemContentToken.Matches(','))
 		        {
 			        Debug.Assert(itemContentToken.TokenType == TokenType.Identifier);
 			        itemContentToken = GetToken(true) ?? throw new CodeParserException("Ini Parse", $"unexpected end of file {GetFileLocation(file)}");
